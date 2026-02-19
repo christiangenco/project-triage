@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Triage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .scan-spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    tr.highlighted > td { box-shadow: inset 0 0 0 2px #6366f1; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+<div x-data="projectApp()" x-init="init()" @keydown.window="handleKey($event)" class="max-w-[100rem] mx-auto px-4 py-6">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-3xl font-bold text-gray-800">🔍 Project Triage</h1>
+      <p class="text-gray-500 mt-1 text-sm">
+        <span x-text="projects.length"></span> total ·
+        <span x-text="projects.filter(p => p.scanned).length"></span> scanned ·
+        <span x-text="projects.filter(p => !p.archived).length"></span> active ·
+        <span x-text="projects.filter(p => p.archived).length"></span> archived
+      </p>
+    </div>
+    <div class="flex gap-2">
+      <button
+        @click="scanUnscanned()"
+        :disabled="scanning.size > 0"
+        class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+        <span x-show="scanning.size === 0">⚡ Scan All Unscanned (visible)</span>
+        <span x-show="scanning.size > 0" x-text="'Scanning ' + scanning.size + '...'"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-1 mb-4 border-b border-gray-200">
+    <button @click="tab = 'inbox'"
+      :class="tab === 'inbox' ? 'border-indigo-500 text-indigo-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'"
+      class="px-4 py-2 text-sm font-medium border-b-2 rounded-t-lg transition">
+      📥 Inbox
+      <span class="ml-1 text-xs bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full"
+        x-text="projects.filter(p => p.status !== 'starred' && p.status !== 'hidden').length"></span>
+    </button>
+    <button @click="tab = 'starred'"
+      :class="tab === 'starred' ? 'border-yellow-500 text-yellow-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'"
+      class="px-4 py-2 text-sm font-medium border-b-2 rounded-t-lg transition">
+      ⭐ Starred
+      <span class="ml-1 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full"
+        x-text="projects.filter(p => p.status === 'starred').length"></span>
+    </button>
+    <button @click="tab = 'hidden'"
+      :class="tab === 'hidden' ? 'border-gray-400 text-gray-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'"
+      class="px-4 py-2 text-sm font-medium border-b-2 rounded-t-lg transition">
+      🗑 Hidden
+      <span class="ml-1 text-xs bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full"
+        x-text="projects.filter(p => p.status === 'hidden').length"></span>
+    </button>
+  </div>
+
+  <!-- Filters -->
+  <div class="flex flex-wrap gap-3 mb-4 items-center">
+    <input
+      x-ref="searchInput"
+      x-model="search"
+      type="text"
+      placeholder="Search projects..."
+      class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-64 focus:ring-2 focus:ring-indigo-300 focus:outline-none">
+
+    <select x-model="filterArchived" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+      <option value="all">All projects</option>
+      <option value="active">Active only</option>
+      <option value="archived">Archived only</option>
+    </select>
+
+    <select x-model="filterScanned" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+      <option value="all">All scan states</option>
+      <option value="scanned">Scanned</option>
+      <option value="unscanned">Unscanned</option>
+      <option value="error">Errors</option>
+    </select>
+
+    <select x-model="filterCategory" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+      <option value="">All categories</option>
+      <template x-for="cat in categories" :key="cat">
+        <option :value="cat" x-text="cat"></option>
+      </template>
+    </select>
+
+    <select x-model="sortBy" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+      <option value="name">Sort by name</option>
+      <option value="completeness">Sort by completeness</option>
+      <option value="category">Sort by category</option>
+      <option value="archived">Active first</option>
+    </select>
+
+    <span class="text-sm text-gray-500" x-text="filtered().length + ' shown'"></span>
+
+    <!-- Keyboard shortcuts help -->
+    <span class="text-xs text-gray-400 ml-auto">
+      <kbd class="bg-gray-100 border px-1 rounded">j/k</kbd> navigate
+      <kbd class="bg-gray-100 border px-1 rounded">h/l</kbd> tabs
+      <kbd class="bg-gray-100 border px-1 rounded">⏎</kbd> star
+      <kbd class="bg-gray-100 border px-1 rounded">⌫</kbd> hide
+      <kbd class="bg-gray-100 border px-1 rounded">space</kbd> scan
+      <kbd class="bg-gray-100 border px-1 rounded">.</kbd> notes
+      <kbd class="bg-gray-100 border px-1 rounded">/</kbd> search
+    </span>
+  </div>
+
+  <!-- Table -->
+  <div class="bg-white rounded-xl shadow overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-100 border-b">
+        <tr>
+          <th class="text-center px-2 py-3 font-semibold w-10"></th>
+          <th class="text-left px-4 py-3 font-semibold w-48">Project</th>
+          <th class="text-left px-4 py-3 font-semibold">Summary</th>
+          <th class="text-left px-4 py-3 font-semibold w-36">Tech Stack</th>
+          <th class="text-center px-4 py-3 font-semibold w-12" title="Completeness">✅</th>
+          <th class="text-left px-4 py-3 font-semibold w-36">Category</th>
+          <th class="text-left px-4 py-3 font-semibold w-64">Notes</th>
+          <th class="text-center px-4 py-3 font-semibold w-16">Scan</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="(project, idx) in filtered()" :key="project.id">
+          <tr class="border-b hover:bg-gray-50 transition"
+              :class="{
+                'bg-yellow-50/50': project.notes,
+                'opacity-60': project.archived && !project.scanned,
+                'highlighted': idx === highlightIdx
+              }"
+              @click="highlightIdx = idx">
+            <!-- Star/status -->
+            <td class="px-2 py-3 text-center">
+              <button @click.stop="toggleStatus(project, project.status === 'starred' ? '' : 'starred')"
+                class="text-lg leading-none hover:scale-110 transition"
+                :class="project.status === 'starred' ? 'text-yellow-400' : 'text-gray-300 hover:text-yellow-300'"
+                x-text="project.status === 'starred' ? '★' : '☆'">
+              </button>
+            </td>
+            <!-- Name -->
+            <td class="px-4 py-3">
+              <div class="font-medium" x-text="project.name || project.dir_name"></div>
+              <div class="text-xs text-gray-400 truncate max-w-[12rem]" x-text="project.path"></div>
+              <span x-show="project.archived"
+                    class="inline-block text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded mt-1">archived</span>
+            </td>
+            <!-- Summary -->
+            <td class="px-4 py-3">
+              <template x-if="project.scanned">
+                <div>
+                  <div x-text="project.summary" class="text-gray-700"></div>
+                  <div x-show="project.target_audience" class="text-xs text-gray-400 mt-1">
+                    Audience: <span x-text="project.target_audience"></span>
+                  </div>
+                </div>
+              </template>
+              <template x-if="!project.scanned && project.error">
+                <span class="text-red-500 text-xs" x-text="project.error"></span>
+              </template>
+              <template x-if="!project.scanned && !project.error">
+                <span class="text-gray-300 italic">Not yet scanned</span>
+              </template>
+            </td>
+            <!-- Tech Stack -->
+            <td class="px-4 py-3 text-xs text-gray-600" x-text="project.tech_stack || '—'"></td>
+            <!-- Completeness -->
+            <td class="px-4 py-3 text-center">
+              <template x-if="project.completeness">
+                <span class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold"
+                      :class="{
+                        'bg-red-100 text-red-700': project.completeness <= 2,
+                        'bg-yellow-100 text-yellow-700': project.completeness === 3,
+                        'bg-green-100 text-green-700': project.completeness >= 4
+                      }"
+                      x-text="project.completeness"></span>
+              </template>
+            </td>
+            <!-- Category -->
+            <td class="px-4 py-3 text-xs text-gray-600" x-text="project.category || '—'"></td>
+            <!-- Notes -->
+            <td class="px-4 py-3">
+              <textarea
+                :x-ref="'notes-' + project.id"
+                :data-note-id="project.id"
+                x-model="project.notes"
+                @input.debounce.500ms="saveNotes(project)"
+                @keydown.escape="$el.blur()"
+                placeholder="Add notes..."
+                rows="2"
+                class="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-2 focus:ring-indigo-300 focus:outline-none resize-none"></textarea>
+              <div x-show="saved.has(project.id)" x-transition class="text-[10px] text-green-500 mt-0.5">Saved ✓</div>
+            </td>
+            <!-- Scan button -->
+            <td class="px-4 py-3 text-center">
+              <template x-if="!project.scanned || project.error">
+                <button
+                  @click="scanProject(project)"
+                  :disabled="scanning.has(project.id)"
+                  class="hover:scale-125 disabled:opacity-50 transition text-base"
+                  :title="scanning.has(project.id) ? 'Scanning...' : 'Scan with AI'">
+                  <span x-show="!scanning.has(project.id)">🪄</span>
+                  <span x-show="scanning.has(project.id)" class="inline-block scan-spin">⏳</span>
+                </button>
+              </template>
+              <template x-if="project.scanned && !project.error">
+                <span class="text-green-500 text-base">✅</span>
+              </template>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+
+    <!-- Empty state -->
+    <div x-show="filtered().length === 0" class="p-12 text-center text-gray-400">
+      <p class="text-lg">No projects match your filters</p>
+    </div>
+  </div>
+</div>
+
+<script>
+function projectApp() {
+  return {
+    projects: [],
+    search: '',
+    tab: 'inbox',
+    filterArchived: 'all',
+    filterScanned: 'all',
+    filterCategory: '',
+    sortBy: 'archived',
+    scanning: new Set(),
+    saved: new Set(),
+    highlightIdx: 0,
+
+    init() {
+      this.projects = <%= @projects.to_json %>;
+      // Ensure all projects have a status field
+      this.projects.forEach(p => { if (!p.status) p.status = ''; });
+    },
+
+    get categories() {
+      return [...new Set(this.projects.map(p => p.category).filter(Boolean))].sort();
+    },
+
+    filtered() {
+      let list = this.projects;
+
+      // Tab filter
+      if (this.tab === 'inbox') list = list.filter(p => p.status !== 'starred' && p.status !== 'hidden');
+      if (this.tab === 'starred') list = list.filter(p => p.status === 'starred');
+      if (this.tab === 'hidden') list = list.filter(p => p.status === 'hidden');
+
+      if (this.search) {
+        const q = this.search.toLowerCase();
+        list = list.filter(p =>
+          (p.name || '').toLowerCase().includes(q) ||
+          (p.dir_name || '').toLowerCase().includes(q) ||
+          (p.summary || '').toLowerCase().includes(q) ||
+          (p.tech_stack || '').toLowerCase().includes(q) ||
+          (p.category || '').toLowerCase().includes(q) ||
+          (p.notes || '').toLowerCase().includes(q)
+        );
+      }
+
+      if (this.filterArchived === 'active') list = list.filter(p => !p.archived);
+      if (this.filterArchived === 'archived') list = list.filter(p => p.archived);
+
+      if (this.filterScanned === 'scanned') list = list.filter(p => p.scanned);
+      if (this.filterScanned === 'unscanned') list = list.filter(p => !p.scanned && !p.error);
+      if (this.filterScanned === 'error') list = list.filter(p => p.error);
+
+      if (this.filterCategory) list = list.filter(p => p.category === this.filterCategory);
+
+      list = [...list];
+      if (this.sortBy === 'name') list.sort((a, b) => (a.name || a.dir_name).localeCompare(b.name || b.dir_name));
+      if (this.sortBy === 'completeness') list.sort((a, b) => (b.completeness || 0) - (a.completeness || 0));
+      if (this.sortBy === 'category') list.sort((a, b) => (a.category || 'zzz').localeCompare(b.category || 'zzz'));
+      if (this.sortBy === 'archived') list.sort((a, b) => (a.archived === b.archived ? 0 : a.archived ? 1 : -1));
+
+      return list;
+    },
+
+    handleKey(e) {
+      // Don't capture keys when typing in inputs
+      const tag = e.target.tagName;
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      if (e.key === '/' && !isInput) {
+        e.preventDefault();
+        this.$refs.searchInput.focus();
+        return;
+      }
+
+      if (e.key === 'Escape' && isInput) {
+        e.target.blur();
+        return;
+      }
+
+      if (isInput) return;
+
+      const items = this.filtered();
+      if (!items.length) return;
+
+      if (e.key === 'ArrowDown' || e.key === 'j') {
+        e.preventDefault();
+        this.highlightIdx = Math.min(this.highlightIdx + 1, items.length - 1);
+        this.scrollToHighlighted();
+      } else if (e.key === 'ArrowUp' || e.key === 'k') {
+        e.preventDefault();
+        this.highlightIdx = Math.max(this.highlightIdx - 1, 0);
+        this.scrollToHighlighted();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const p = items[this.highlightIdx];
+        if (p) this.toggleStatus(p, p.status === 'starred' ? '' : 'starred');
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        const p = items[this.highlightIdx];
+        if (p) {
+          this.toggleStatus(p, p.status === 'hidden' ? '' : 'hidden');
+          // Keep index in bounds after item moves out of view
+          this.$nextTick(() => {
+            const newItems = this.filtered();
+            if (this.highlightIdx >= newItems.length) {
+              this.highlightIdx = Math.max(0, newItems.length - 1);
+            }
+          });
+        }
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        const p = items[this.highlightIdx];
+        if (p && !p.scanned && !this.scanning.has(p.id)) this.scanProject(p);
+        this.highlightIdx = Math.min(this.highlightIdx + 1, items.length - 1);
+        this.scrollToHighlighted();
+      } else if (e.key === 'ArrowRight' || e.key === 'l') {
+        e.preventDefault();
+        const tabs = ['inbox', 'starred', 'hidden'];
+        const i = tabs.indexOf(this.tab);
+        this.tab = tabs[Math.min(i + 1, tabs.length - 1)];
+        this.highlightIdx = 0;
+      } else if (e.key === 'ArrowLeft' || e.key === 'h') {
+        e.preventDefault();
+        const tabs = ['inbox', 'starred', 'hidden'];
+        const i = tabs.indexOf(this.tab);
+        this.tab = tabs[Math.max(i - 1, 0)];
+        this.highlightIdx = 0;
+      } else if (e.key === '.') {
+        e.preventDefault();
+        const p = items[this.highlightIdx];
+        if (p) {
+          const el = document.querySelector(`textarea[data-note-id="${CSS.escape(p.id)}"]`);
+          if (el) el.focus();
+        }
+      }
+    },
+
+    scrollToHighlighted() {
+      this.$nextTick(() => {
+        const row = document.querySelector('tr.highlighted');
+        if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    },
+
+    async toggleStatus(project, newStatus) {
+      project.status = newStatus;
+      await fetch(`/projects/${encodeURIComponent(project.id)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+    },
+
+    async saveNotes(project) {
+      await fetch(`/projects/${encodeURIComponent(project.id)}/notes`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: project.notes })
+      });
+      this.saved.add(project.id);
+      setTimeout(() => { this.saved.delete(project.id); this.saved = new Set(this.saved); }, 2000);
+      this.saved = new Set(this.saved);
+    },
+
+    async scanProject(project) {
+      this.scanning.add(project.id);
+      this.scanning = new Set(this.scanning);
+      try {
+        const res = await fetch(`/projects/${encodeURIComponent(project.id)}/scan`, { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          Object.assign(project, data);
+        } else {
+          project.error = data.error || 'Scan failed';
+        }
+      } catch (e) {
+        project.error = 'Network error';
+      }
+      this.scanning.delete(project.id);
+      this.scanning = new Set(this.scanning);
+    },
+
+    async scanUnscanned() {
+      const unscanned = this.filtered().filter(p => !p.scanned);
+      const PARALLEL = 4;
+      let i = 0;
+      const next = async () => {
+        if (i >= unscanned.length) return;
+        const project = unscanned[i++];
+        await this.scanProject(project);
+        await next();
+      };
+      const workers = [];
+      for (let w = 0; w < Math.min(PARALLEL, unscanned.length); w++) {
+        workers.push(next());
+      }
+      await Promise.all(workers);
+    }
+  };
+}
+</script>
+</body>
+</html>
